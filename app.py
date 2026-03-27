@@ -376,28 +376,37 @@ def create_team(battle_id, player_label, pokemon_names, conn):
               int(p['sp_atk']), int(p['sp_def']), int(p['speed']),
               int(p['generation']), int(p['legendary'])))
     conn.commit()
-
 def get_active_pokemon(battle_id, player_label, conn):
-    df = pd.read_sql_query("""
+    """Get the first alive Pokémon for a player"""
+    c = conn.cursor()
+    c.execute("""
         SELECT * FROM team_pokemon
         WHERE battle_id = ? AND player_label = ? AND current_hp > 0
         ORDER BY slot_number LIMIT 1
-    """, conn, params=(battle_id, player_label))
-    return df.iloc[0] if not df.empty else None
+    """, (battle_id, player_label))
+    
+    row = c.fetchone()
+    if row:
+        # Convert to dict-like object
+        columns = [description[0] for description in c.description]
+        return dict(zip(columns, row))
+    return None
+
 def apply_damage(pokemon_id, damage, conn):
     """Apply damage to a Pokémon and commit immediately"""
     c = conn.cursor()
     
-    # First, get current HP
+    # Get current HP
     c.execute("SELECT current_hp FROM team_pokemon WHERE id = ?", (pokemon_id,))
     result = c.fetchone()
+    
     if result:
         current_hp = result[0]
         new_hp = max(0, current_hp - damage)
         
         # Update with new HP
         c.execute("UPDATE team_pokemon SET current_hp = ? WHERE id = ?", (new_hp, pokemon_id))
-        conn.commit()  # IMPORTANT: Commit immediately
+        conn.commit()
         return new_hp
     return 0
 
