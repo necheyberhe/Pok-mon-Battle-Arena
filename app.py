@@ -3,139 +3,15 @@ import pandas as pd
 import sqlite3
 import random
 import os
-import subprocess
-import sys
 
 # ============================================================================
-# KAGGLE DATASET DOWNLOAD
-# ============================================================================
-
-def setup_kaggle_credentials():
-    """Set up Kaggle API credentials if needed"""
-    # Check if kaggle.json exists
-    kaggle_dir = os.path.expanduser("~/.kaggle")
-    kaggle_json = os.path.join(kaggle_dir, "kaggle.json")
-    
-    if not os.path.exists(kaggle_json):
-        st.warning("""
-        ⚠️ Kaggle API credentials not found!
-        
-        To download the Pokémon dataset from Kaggle, you need to:
-        1. Go to https://www.kaggle.com/account
-        2. Create API token (download kaggle.json)
-        3. Upload it to the .kaggle folder in your home directory
-        
-        For Streamlit Cloud, add your Kaggle credentials to Secrets:
-        - KAGGLE_USERNAME: your_username
-        - KAGGLE_KEY: your_key
-        """)
-        return False
-    
-    return True
-
-def download_kaggle_dataset():
-    """Download Pokémon dataset from Kaggle"""
-    
-    # Check if CSV already exists
-    if os.path.exists("pokemon.csv"):
-        st.info("✅ Pokémon dataset already exists. Using existing file.")
-        return True
-    
-    st.info("📥 Downloading Pokémon dataset from Kaggle...")
-    
-    try:
-        # Install kaggle package
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "kaggle", "-q"])
-        
-        # Try to download using Kaggle API
-        result = subprocess.run(
-            ["kaggle", "datasets", "download", "-d", "rounakbanik/pokemon", "--unzip"],
-            capture_output=True,
-            text=True,
-            cwd="."
-        )
-        
-        if result.returncode != 0:
-            st.error(f"Kaggle download failed: {result.stderr}")
-            return False
-        
-        # Check if pokemon.csv was created
-        if os.path.exists("pokemon.csv"):
-            st.success("✅ Pokémon dataset downloaded successfully from Kaggle!")
-            return True
-        else:
-            st.error("Download completed but pokemon.csv not found")
-            return False
-            
-    except subprocess.CalledProcessError as e:
-        st.error(f"Error downloading from Kaggle: {e}")
-        return False
-    except Exception as e:
-        st.error(f"Unexpected error: {e}")
-        return False
-
-def load_kaggle_data():
-    """Load and validate Kaggle Pokémon data"""
-    
-    # Download dataset
-    if not download_kaggle_dataset():
-        st.error("""
-        ❌ Failed to download Pokémon dataset from Kaggle.
-        
-        Please ensure:
-        1. You have Kaggle API credentials configured
-        2. You have accepted the dataset rules at:
-           https://www.kaggle.com/datasets/rounakbanik/pokemon
-        """)
-        st.stop()
-    
-    # Load the CSV
-    try:
-        df = pd.read_csv("pokemon.csv")
-        st.success(f"📊 Loaded {len(df)} Pokémon from Kaggle dataset!")
-        
-        # Display dataset info
-        with st.expander("📋 Dataset Information"):
-            st.write(f"**Shape:** {df.shape}")
-            st.write(f"**Columns:** {list(df.columns)}")
-            st.write("**First 5 rows:**")
-            st.dataframe(df.head())
-        
-        # Clean column names
-        df.columns = [col.strip().lower().replace(" ", "_").replace(".", "") for col in df.columns]
-        
-        # Map to expected column names
-        column_mapping = {
-            'pokedex_number': 'id',
-            'sp_attack': 'sp_atk',
-            'sp_defense': 'sp_def',
-            'is_legendary': 'legendary'
-        }
-        
-        df = df.rename(columns=column_mapping)
-        
-        # Validate required columns exist
-        required_cols = ['id', 'name', 'type1', 'hp', 'attack', 'defense', 'sp_atk', 'sp_def', 'speed', 'generation', 'legendary']
-        missing_cols = [col for col in required_cols if col not in df.columns]
-        
-        if missing_cols:
-            st.error(f"Missing required columns: {missing_cols}")
-            st.stop()
-        
-        return df
-        
-    except Exception as e:
-        st.error(f"Error loading CSV file: {e}")
-        st.stop()
-
-# ============================================================================
-# DATABASE SETUP
+# DATABASE SETUP (Uses local pokemon.csv - NO KAGGLE)
 # ============================================================================
 
 DB_PATH = "pokemon_battle.db"
 
 def init_database():
-    """Initialize database with Pokémon data from Kaggle"""
+    """Initialize database with Pokémon data from local CSV"""
     
     # Remove existing database
     if os.path.exists(DB_PATH):
@@ -222,18 +98,25 @@ def init_database():
     )
     """)
     
-    # Load Pokémon data from Kaggle
-    df = load_kaggle_data()
+    # Load Pokémon data from local CSV (NOT from Kaggle)
+    df = pd.read_csv("pokemon.csv")
+    
+    # Clean column names
+    df.columns = [col.strip().lower().replace(" ", "_").replace(".", "") for col in df.columns]
+    
+    # Map to expected column names
+    df = df.rename(columns={
+        'pokedex_number': 'id',
+        'sp_attack': 'sp_atk',
+        'sp_defense': 'sp_def',
+        'is_legendary': 'legendary'
+    })
     
     # Insert Pokémon data
     inserted = 0
-    skipped = 0
-    
     for _, row in df.iterrows():
         try:
-            # Handle type2 (may be NaN)
             type2 = row['type2'] if pd.notna(row['type2']) else None
-            
             c.execute("""
             INSERT INTO pokemon (id, name, type1, type2, hp, attack, defense, sp_atk, sp_def, speed, generation, legendary)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -253,89 +136,28 @@ def init_database():
             ))
             inserted += 1
         except Exception as e:
-            skipped += 1
             continue
     
-    st.success(f"✅ Inserted {inserted} Pokémon into database")
-    if skipped > 0:
-        st.warning(f"⚠️ Skipped {skipped} records due to errors")
+    st.success(f"✅ Loaded {inserted} Pokémon from local dataset!")
     
-    # Insert comprehensive type effectiveness data
-    # Based on official Pokémon type chart
+    # Insert type effectiveness data
     type_effects = [
-        # Normal
-        ("Normal", "Rock", 0.5), ("Normal", "Ghost", 0.0), ("Normal", "Steel", 0.5),
-        # Fire
-        ("Fire", "Grass", 2.0), ("Fire", "Ice", 2.0), ("Fire", "Bug", 2.0), ("Fire", "Steel", 2.0),
-        ("Fire", "Water", 0.5), ("Fire", "Fire", 0.5), ("Fire", "Rock", 0.5), ("Fire", "Dragon", 0.5),
-        # Water
-        ("Water", "Fire", 2.0), ("Water", "Ground", 2.0), ("Water", "Rock", 2.0),
-        ("Water", "Water", 0.5), ("Water", "Grass", 0.5), ("Water", "Dragon", 0.5),
-        # Electric
-        ("Electric", "Water", 2.0), ("Electric", "Flying", 2.0),
-        ("Electric", "Electric", 0.5), ("Electric", "Grass", 0.5), ("Electric", "Dragon", 0.5),
-        # Grass
-        ("Grass", "Water", 2.0), ("Grass", "Ground", 2.0), ("Grass", "Rock", 2.0),
-        ("Grass", "Fire", 0.5), ("Grass", "Grass", 0.5), ("Grass", "Poison", 0.5), ("Grass", "Flying", 0.5), ("Grass", "Bug", 0.5), ("Grass", "Dragon", 0.5), ("Grass", "Steel", 0.5),
-        # Ice
-        ("Ice", "Grass", 2.0), ("Ice", "Ground", 2.0), ("Ice", "Flying", 2.0), ("Ice", "Dragon", 2.0),
-        ("Ice", "Fire", 0.5), ("Ice", "Water", 0.5), ("Ice", "Ice", 0.5), ("Ice", "Steel", 0.5),
-        # Fighting
-        ("Fighting", "Normal", 2.0), ("Fighting", "Ice", 2.0), ("Fighting", "Rock", 2.0), ("Fighting", "Dark", 2.0), ("Fighting", "Steel", 2.0),
-        ("Fighting", "Poison", 0.5), ("Fighting", "Flying", 0.5), ("Fighting", "Psychic", 0.5), ("Fighting", "Bug", 0.5), ("Fighting", "Fairy", 0.5),
-        ("Fighting", "Ghost", 0.0),
-        # Poison
-        ("Poison", "Grass", 2.0), ("Poison", "Fairy", 2.0),
-        ("Poison", "Poison", 0.5), ("Poison", "Ground", 0.5), ("Poison", "Rock", 0.5), ("Poison", "Ghost", 0.5),
-        ("Poison", "Steel", 0.0),
-        # Ground
-        ("Ground", "Fire", 2.0), ("Ground", "Electric", 2.0), ("Ground", "Poison", 2.0), ("Ground", "Rock", 2.0), ("Ground", "Steel", 2.0),
-        ("Ground", "Grass", 0.5), ("Ground", "Bug", 0.5),
-        ("Ground", "Flying", 0.0),
-        # Flying
-        ("Flying", "Grass", 2.0), ("Flying", "Fighting", 2.0), ("Flying", "Bug", 2.0),
-        ("Flying", "Electric", 0.5), ("Flying", "Rock", 0.5), ("Flying", "Steel", 0.5),
-        # Psychic
-        ("Psychic", "Fighting", 2.0), ("Psychic", "Poison", 2.0),
-        ("Psychic", "Psychic", 0.5), ("Psychic", "Steel", 0.5),
-        ("Psychic", "Dark", 0.0),
-        # Bug
-        ("Bug", "Grass", 2.0), ("Bug", "Psychic", 2.0), ("Bug", "Dark", 2.0),
-        ("Bug", "Fire", 0.5), ("Bug", "Fighting", 0.5), ("Bug", "Poison", 0.5), ("Bug", "Flying", 0.5), ("Bug", "Ghost", 0.5), ("Bug", "Steel", 0.5), ("Bug", "Fairy", 0.5),
-        # Rock
-        ("Rock", "Fire", 2.0), ("Rock", "Ice", 2.0), ("Rock", "Flying", 2.0), ("Rock", "Bug", 2.0),
-        ("Rock", "Fighting", 0.5), ("Rock", "Ground", 0.5), ("Rock", "Steel", 0.5),
-        # Ghost
-        ("Ghost", "Psychic", 2.0), ("Ghost", "Ghost", 2.0),
-        ("Ghost", "Dark", 0.5),
-        ("Ghost", "Normal", 0.0),
-        # Dragon
-        ("Dragon", "Dragon", 2.0),
-        ("Dragon", "Steel", 0.5),
-        ("Dragon", "Fairy", 0.0),
-        # Dark
-        ("Dark", "Psychic", 2.0), ("Dark", "Ghost", 2.0),
-        ("Dark", "Fighting", 0.5), ("Dark", "Dark", 0.5), ("Dark", "Fairy", 0.5),
-        # Steel
-        ("Steel", "Ice", 2.0), ("Steel", "Rock", 2.0), ("Steel", "Fairy", 2.0),
-        ("Steel", "Fire", 0.5), ("Steel", "Water", 0.5), ("Steel", "Electric", 0.5), ("Steel", "Steel", 0.5),
-        # Fairy
-        ("Fairy", "Fighting", 2.0), ("Fairy", "Dragon", 2.0), ("Fairy", "Dark", 2.0),
-        ("Fairy", "Fire", 0.5), ("Fairy", "Poison", 0.5), ("Fairy", "Steel", 0.5),
+        ("Fire", "Grass", 2.0), ("Fire", "Water", 0.5), ("Fire", "Fire", 0.5),
+        ("Water", "Fire", 2.0), ("Water", "Grass", 0.5), ("Water", "Water", 0.5),
+        ("Grass", "Water", 2.0), ("Grass", "Fire", 0.5), ("Grass", "Grass", 0.5),
+        ("Electric", "Water", 2.0), ("Electric", "Grass", 0.5), ("Electric", "Electric", 0.5),
+        ("Rock", "Fire", 2.0), ("Ground", "Electric", 2.0), ("Psychic", "Fighting", 2.0),
+        ("Fighting", "Rock", 2.0), ("Fighting", "Normal", 2.0), ("Ghost", "Psychic", 2.0)
     ]
     
     c.executemany("""
-    INSERT OR REPLACE INTO type_effectiveness (attacking_type, defending_type, multiplier)
+    INSERT INTO type_effectiveness (attacking_type, defending_type, multiplier)
     VALUES (?, ?, ?)
     """, type_effects)
     
     conn.commit()
     conn.close()
     return True
-
-# ============================================================================
-# BATTLE FUNCTIONS
-# ============================================================================
 
 def get_db_connection():
     return sqlite3.connect(DB_PATH)
@@ -376,8 +198,8 @@ def create_team(battle_id, player_label, pokemon_names, conn):
               int(p['sp_atk']), int(p['sp_def']), int(p['speed']),
               int(p['generation']), int(p['legendary'])))
     conn.commit()
+
 def get_active_pokemon(battle_id, player_label, conn):
-    """Get the first alive Pokémon for a player"""
     c = conn.cursor()
     c.execute("""
         SELECT * FROM team_pokemon
@@ -387,24 +209,18 @@ def get_active_pokemon(battle_id, player_label, conn):
     
     row = c.fetchone()
     if row:
-        # Convert to dict-like object
         columns = [description[0] for description in c.description]
         return dict(zip(columns, row))
     return None
 
 def apply_damage(pokemon_id, damage, conn):
-    """Apply damage to a Pokémon and commit immediately"""
     c = conn.cursor()
-    
-    # Get current HP
     c.execute("SELECT current_hp FROM team_pokemon WHERE id = ?", (pokemon_id,))
     result = c.fetchone()
     
     if result:
         current_hp = result[0]
         new_hp = max(0, current_hp - damage)
-        
-        # Update with new HP
         c.execute("UPDATE team_pokemon SET current_hp = ? WHERE id = ?", (new_hp, pokemon_id))
         conn.commit()
         return new_hp
@@ -417,8 +233,8 @@ def log_event(battle_id, turn_number, event_type, conn, actor=None, target=None,
         VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (battle_id, turn_number, event_type, actor, target, details, damage))
     conn.commit()
+
 def is_team_alive(battle_id, player_label, conn):
-    """Check if player has any alive Pokémon - reads fresh from DB"""
     c = conn.cursor()
     c.execute("""
         SELECT COUNT(*) as alive FROM team_pokemon
@@ -434,64 +250,43 @@ def execute_turn(battle_id, turn_number, conn):
     if p1 is None or p2 is None:
         return False
     
-    # Turn order by speed
     if p1['speed'] >= p2['speed']:
         first, second = p1, p2
-        first_label, second_label = "Player", "AI"
     else:
         first, second = p2, p1
-        first_label, second_label = "AI", "Player"
     
     # First attack
     damage, multiplier = calculate_damage(first, second, conn)
     effect = "🔥 SUPER EFFECTIVE!" if multiplier > 1 else "💧 NOT VERY EFFECTIVE..." if multiplier < 1 else "⚡ NORMAL HIT"
-    
-    # Apply damage and get new HP
     new_hp = apply_damage(second['id'], damage, conn)
+    log_event(battle_id, turn_number, "attack", conn, actor=first['name'], target=second['name'], details=effect, damage=damage)
     
-    log_event(battle_id, turn_number, "attack", conn, 
-              actor=first['name'], target=second['name'], 
-              details=effect, damage=damage)
-    
-    # Check if defender fainted
     if new_hp == 0:
-        log_event(battle_id, turn_number, "faint", conn, 
-                  details=f"{second['name']} fainted!")
+        log_event(battle_id, turn_number, "faint", conn, details=f"{second['name']} fainted!")
         return True
     
-    # Second attack (only if first defender didn't faint)
+    # Second attack
     damage, multiplier = calculate_damage(second, first, conn)
     effect = "🔥 SUPER EFFECTIVE!" if multiplier > 1 else "💧 NOT VERY EFFECTIVE..." if multiplier < 1 else "⚡ NORMAL HIT"
-    
     new_hp = apply_damage(first['id'], damage, conn)
-    
-    log_event(battle_id, turn_number, "attack", conn,
-              actor=second['name'], target=first['name'],
-              details=effect, damage=damage)
+    log_event(battle_id, turn_number, "attack", conn, actor=second['name'], target=first['name'], details=effect, damage=damage)
     
     if new_hp == 0:
-        log_event(battle_id, turn_number, "faint", conn,
-                  details=f"{first['name']} fainted!")
+        log_event(battle_id, turn_number, "faint", conn, details=f"{first['name']} fainted!")
     
     return True
+
 def run_battle(battle_id, conn, max_turns=100):
     turn = 1
-    
     while turn <= max_turns:
-        # Get fresh HP values each iteration
-        p1_alive = is_team_alive(battle_id, "Player", conn)
-        p2_alive = is_team_alive(battle_id, "AI", conn)
-        
-        if not p1_alive:
+        if not is_team_alive(battle_id, "Player", conn):
             log_event(battle_id, turn, "result", conn, details="💀 AI WINS! 💀")
             return "AI"
-        if not p2_alive:
+        if not is_team_alive(battle_id, "AI", conn):
             log_event(battle_id, turn, "result", conn, details="🎉 PLAYER WINS! 🎉")
             return "Player"
-        
         execute_turn(battle_id, turn, conn)
         turn += 1
-    
     log_event(battle_id, turn, "result", conn, details="🤝 DRAW")
     return "Draw"
 
@@ -580,14 +375,8 @@ def anomaly_detection(battle_id, conn):
 def analyze_power_creep():
     conn = get_db_connection()
     df = pd.read_sql_query("""
-        SELECT generation, 
-               AVG(hp + attack + defense + sp_atk + sp_def + speed) AS avg_total_stats, 
-               COUNT(*) AS count,
-               MIN(hp + attack + defense + sp_atk + sp_def + speed) AS min_total,
-               MAX(hp + attack + defense + sp_atk + sp_def + speed) AS max_total
-        FROM pokemon 
-        GROUP BY generation 
-        ORDER BY generation
+        SELECT generation, AVG(hp + attack + defense + sp_atk + sp_def + speed) AS avg_total_stats, COUNT(*) AS count
+        FROM pokemon GROUP BY generation ORDER BY generation
     """, conn)
     conn.close()
     return df
@@ -595,14 +384,8 @@ def analyze_power_creep():
 def analyze_type_combinations():
     conn = get_db_connection()
     df = pd.read_sql_query("""
-        SELECT type1, COALESCE(type2, 'None') AS type2, 
-               AVG(hp + attack + defense + sp_atk + sp_def + speed) AS avg_total_stats, 
-               COUNT(*) AS count
-        FROM pokemon 
-        GROUP BY type1, COALESCE(type2, 'None') 
-        HAVING COUNT(*) >= 3 
-        ORDER BY avg_total_stats DESC 
-        LIMIT 10
+        SELECT type1, COALESCE(type2, 'None') AS type2, AVG(hp + attack + defense + sp_atk + sp_def + speed) AS avg_total_stats, COUNT(*) AS count
+        FROM pokemon GROUP BY type1, COALESCE(type2, 'None') HAVING COUNT(*) >= 3 ORDER BY avg_total_stats DESC LIMIT 10
     """, conn)
     conn.close()
     return df
@@ -610,15 +393,8 @@ def analyze_type_combinations():
 def analyze_legendary_vs_normal():
     conn = get_db_connection()
     df = pd.read_sql_query("""
-        SELECT CASE WHEN legendary = 1 THEN 'Legendary' ELSE 'Normal' END AS category, 
-               AVG(hp + attack + defense + sp_atk + sp_def + speed) AS avg_total_stats,
-               AVG(hp) AS avg_hp,
-               AVG(attack) AS avg_attack,
-               AVG(defense) AS avg_defense,
-               AVG(speed) AS avg_speed,
-               COUNT(*) AS count
-        FROM pokemon 
-        GROUP BY legendary
+        SELECT CASE WHEN legendary = 1 THEN 'Legendary' ELSE 'Normal' END AS category, AVG(hp + attack + defense + sp_atk + sp_def + speed) AS avg_total_stats, COUNT(*) AS count
+        FROM pokemon GROUP BY legendary
     """, conn)
     conn.close()
     return df
@@ -626,13 +402,8 @@ def analyze_legendary_vs_normal():
 def get_weakest_legendary():
     conn = get_db_connection()
     df = pd.read_sql_query("""
-        SELECT name, type1, COALESCE(type2, 'None') AS type2,
-               (hp + attack + defense + sp_atk + sp_def + speed) AS total_stats,
-               hp, attack, defense, speed
-        FROM pokemon 
-        WHERE legendary = 1 
-        ORDER BY total_stats ASC 
-        LIMIT 5
+        SELECT name, type1, COALESCE(type2, 'None') AS type2, (hp + attack + defense + sp_atk + sp_def + speed) AS total_stats
+        FROM pokemon WHERE legendary = 1 ORDER BY total_stats ASC LIMIT 5
     """, conn)
     conn.close()
     return df
@@ -645,9 +416,10 @@ st.set_page_config(page_title="Pokémon Battle Arena", page_icon="⚔️", layou
 
 # Initialize database on first run
 if 'db_initialized' not in st.session_state:
-    with st.spinner("Initializing Pokémon database from Kaggle..."):
+    with st.spinner("Initializing Pokémon database..."):
         try:
-            st.session_state.db_initialized = init_database()
+            init_database()
+            st.session_state.db_initialized = True
             st.session_state.battle_id = random.randint(1000, 9999)
             st.session_state.battle_active = False
             st.session_state.player_team = []
@@ -659,7 +431,6 @@ if 'db_initialized' not in st.session_state:
             st.stop()
 
 st.title("⚔️ Pokémon Battle Arena")
-st.markdown("*Powered by Kaggle Pokémon Dataset*")
 st.markdown("---")
 
 # Sidebar
@@ -671,7 +442,7 @@ with st.sidebar:
     conn.close()
     pokemon_names = pokemon_df['name'].tolist()
     
-    st.caption(f"📊 {len(pokemon_names)} Pokémon available from Kaggle dataset")
+    st.caption(f"📊 {len(pokemon_names)} Pokémon available")
     
     selected_team = []
     for i in range(3):
@@ -697,15 +468,7 @@ with st.sidebar:
     
     st.markdown("---")
     st.header("🎭 Cheat Codes")
-    st.caption("Enter cheat code and click ACTIVATE")
-    st.code("""
-UPUPDOWNDOWN - Double HP
-GODMODE - Max Defense
-NERF - Reduce opponent stats by 50%
-LEGENDARY - Add OMEGAMON-X
-STEAL - Steal opponent's strongest
-    """)
-    cheat_code = st.text_input("Cheat code:", placeholder="Enter cheat code...")
+    cheat_code = st.text_input("Enter cheat code:", placeholder="UPUPDOWNDOWN, GODMODE, NERF, LEGENDARY, STEAL")
     
     if st.button("💀 ACTIVATE CHEAT", disabled=not st.session_state.battle_active):
         conn = get_db_connection()
@@ -733,7 +496,7 @@ STEAL - Steal opponent's strongest
 
 # Main content
 if not st.session_state.battle_active:
-    st.subheader("📊 Pokémon Data Analysis (from Kaggle Dataset)")
+    st.subheader("📊 Pokémon Data Analysis")
     
     tab1, tab2, tab3, tab4 = st.tabs(["📈 Power Creep", "🔮 Type Combinations", "👑 Legendary vs Normal", "💔 Weakest Legendary"])
     
@@ -742,28 +505,24 @@ if not st.session_state.battle_active:
         if not df.empty:
             st.dataframe(df, use_container_width=True)
             st.line_chart(df.set_index('generation')['avg_total_stats'])
-            st.caption("**Insight:** Average total stats across generations - shows power creep trend")
     
     with tab2:
         df = analyze_type_combinations()
         if not df.empty:
             st.dataframe(df, use_container_width=True)
-            st.caption("**Insight:** Type combinations with highest average total stats")
     
     with tab3:
         df = analyze_legendary_vs_normal()
         if not df.empty:
             st.dataframe(df, use_container_width=True)
-            st.caption("**Insight:** Legendary Pokémon are significantly stronger on average")
     
     with tab4:
         df = get_weakest_legendary()
         if not df.empty:
             st.dataframe(df, use_container_width=True)
-            st.caption("**Insight:** Even among legendaries, some are statistically weaker")
 
 else:
-    # Battle mode (same as before)
+    # Battle mode
     col1, col2 = st.columns(2)
     
     with col1:
@@ -832,14 +591,12 @@ else:
             hp_percent = (player_active['current_hp'] / player_active['max_hp']) * 100
             st.metric("Your Active", player_active['name'], f"HP: {player_active['current_hp']}/{player_active['max_hp']}")
             st.progress(hp_percent / 100)
-            st.caption(f"Type: {player_active['type1']}" + (f"/{player_active['type2']}" if player_active['type2'] else ""))
     
     with col_status2:
         if ai_active is not None:
             hp_percent = (ai_active['current_hp'] / ai_active['max_hp']) * 100
             st.metric("AI Active", ai_active['name'], f"HP: {ai_active['current_hp']}/{ai_active['max_hp']}")
             st.progress(hp_percent / 100)
-            st.caption(f"Type: {ai_active['type1']}" + (f"/{ai_active['type2']}" if ai_active['type2'] else ""))
     
     st.markdown("---")
     st.subheader("📜 Battle Log")
@@ -848,19 +605,13 @@ else:
     conn.close()
     
     if not log_df.empty:
-        display_log = []
-        for _, row in log_df.iterrows():
+        for _, row in log_df.tail(15).iterrows():
             if row['event_type'] == 'attack':
-                log_entry = f"Turn {row['turn_number']}: {row['actor']} → {row['target']} ({row['details']}) for {row['damage']} damage!"
-                display_log.append(log_entry)
+                st.text(f"Turn {row['turn_number']}: {row['actor']} → {row['target']} ({row['details']}) for {row['damage']} damage!")
             elif row['event_type'] == 'faint':
-                log_entry = f"Turn {row['turn_number']}: {row['details']}"
-                display_log.append(log_entry)
+                st.text(f"Turn {row['turn_number']}: {row['details']}")
             elif row['event_type'] == 'result':
-                display_log.append(f"🏁 {row['details']}")
-        
-        for entry in display_log[-15:]:
-            st.text(entry)
+                st.text(f"🏁 {row['details']}")
     else:
         st.info("Click 'Execute Turn' to start the battle!")
     
@@ -872,6 +623,6 @@ else:
         
         anomalies = anomaly_detection(st.session_state.battle_id, conn)
         if not anomalies.empty:
-            st.warning("⚠️ Stats exceeding natural limits detected! Cheats used!")
+            st.warning("⚠️ Stats exceeding natural limits detected!")
             st.dataframe(anomalies, use_container_width=True)
         conn.close()
